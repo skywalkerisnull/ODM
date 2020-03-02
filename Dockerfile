@@ -1,13 +1,19 @@
-FROM phusion/baseimage as base
+FROM ubuntu:xenial as base
 
 # Env variables
 ENV DEBIAN_FRONTEND noninteractive
 
-#Install dependencies and required requisites
-RUN add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable \
+# Install dependencies and required requisites
+RUN apt-get update \
+  && apt-get install --no-install-recommends --fix-missing -y \
+  software-properties-common \
+  python-software-properties \
+  && add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable \
   && add-apt-repository -y ppa:george-edison55/cmake-3.x \
-  && apt-get update -y \
-  && apt-get install --no-install-recommends -y \
+  && rm -rf /var/lib/apt/lists/* \
+  && apt-get update \
+  && apt-get upgrade -y \
+  && apt-get install --no-install-recommends --fix-missing -y \
   build-essential \
   cmake \
   gdal-bin \
@@ -46,16 +52,14 @@ RUN add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable \
   python-gdal \
   python-matplotlib \
   python-pip \
-  python-software-properties \
   python-wheel \
-  software-properties-common \
   swig2.0 \
   grass-core \
   libssl-dev \
   && apt-get remove libdc1394-22-dev \
+  && apt-get autoremove -y \
   && pip install --upgrade pip \
   && pip install setuptools
-
 
 # Prepare directories
 WORKDIR /code
@@ -63,14 +67,15 @@ WORKDIR /code
 # Copy everything
 COPY . ./
 
-RUN pip install -r requirements.txt
-
 ENV PYTHONPATH="$PYTHONPATH:/code/SuperBuild/install/lib/python2.7/dist-packages"
 ENV PYTHONPATH="$PYTHONPATH:/code/SuperBuild/src/opensfm"
 ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/code/SuperBuild/install/lib"
 
+# Setup the builder image
+FROM base as builder
+
 # Compile code in SuperBuild and root directories
-RUN rm -fr docker \
+RUN rm -rf docker \
   && cd SuperBuild \
   && mkdir build \
   && cd build \
@@ -82,20 +87,40 @@ RUN rm -fr docker \
   && cmake .. \
   && make -j$(nproc)
 
-# Cleanup APT
-RUN apt-get clean \
-  && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* 
+ENTRYPOINT [ "bash" ]
 
-# Clean Superbuild
-RUN rm -rf \
-  /code/SuperBuild/build/opencv \
-  /code/SuperBuild/download \
-  /code/SuperBuild/src/ceres \
-  /code/SuperBuild/src/mvstexturing \
-  /code/SuperBuild/src/opencv \
-  /code/SuperBuild/src/opengv \
-  /code/SuperBuild/src/pcl \
-  /code/SuperBuild/src/pdal
+# Setup the image used for production
+FROM ubuntu:xenial as production
+
+RUN apt-get update \
+  && apt-get install --no-install-recommends --fix-missing -y \
+  software-properties-common \
+  python-software-properties \
+  && rm -rf /var/lib/apt/lists/* \
+  && apt-get update \
+  && apt-get install --no-install-recommends --fix-missing -y \
+  build-essential \
+  gdal-bin \
+  git \
+  python-dev \
+  python-gdal \
+  python-matplotlib \
+  python-pip \
+  python-wheel \
+  swig2.0 \
+  grass-core \
+  libffi-dev \
+  libssl-dev \
+  && apt-get remove libdc1394-22-dev \
+  && pip install --upgrade pip \
+  && pip install setuptools
+
+COPY . ./
+COPY --from=builder /code/SuperBuild/build /code/SuperBuild/install /code/SuperBuild/
+
+RUN apt-get install -y 
+
+RUN pip install -r requirements.txt
 
 # Entry point
 ENTRYPOINT ["python", "/code/run.py"]
